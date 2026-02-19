@@ -2,18 +2,28 @@
 
 exports.handler = async (event) => {
   try {
-    // Só aceita POST
+    // CORS / preflight (não atrapalha e evita dor de cabeça)
+    if (event.httpMethod === "OPTIONS") {
+      return {
+        statusCode: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+        },
+        body: "",
+      };
+    }
+
     if (event.httpMethod !== "POST") {
       return { statusCode: 405, body: "Method Not Allowed" };
     }
 
-    // Chave fica só no servidor (Netlify)
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return { statusCode: 500, body: "Missing GEMINI_API_KEY" };
     }
 
-    // Corpo esperado: { model, contents, config }
     const payload = JSON.parse(event.body || "{}");
     const { model, contents, config } = payload;
 
@@ -21,23 +31,39 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: "Missing model or contents" };
     }
 
-    const url =
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-        model
-      )}:generateContent?key=` + apiKey;
+    // Normaliza config (principalmente systemInstruction)
+    const normalizedConfig = { ...(config || {}) };
 
-    const body = { contents };
-    if (config) body.config = config;
+    // Se vier string, transforma no formato que o REST entende
+    if (typeof normalizedConfig.systemInstruction === "string") {
+      normalizedConfig.systemInstruction = {
+        parts: [{ text: normalizedConfig.systemInstruction }],
+      };
+    }
+
+    // CORREÇÃO PRINCIPAL:
+    // No REST, tools/toolConfig/systemInstruction/generationConfig ficam no topo do body
+    const body = {
+      contents,
+      ...normalizedConfig,
+    };
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      model
+    )}:generateContent`;
 
     const r = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
       body: JSON.stringify(body),
     });
 
-    const data = await r.json();
+    const data = await r.json().catch(() => ({}));
 
-    // Cria um "text" (parecido com o SDK) pra facilitar seu parse atual
+    // Monta "text" igual SDK
     const text =
       data?.candidates?.[0]?.content?.parts
         ?.map((p) => p?.text)
@@ -50,7 +76,6 @@ exports.handler = async (event) => {
       statusCode: r.status,
       headers: {
         "Content-Type": "application/json",
-        // (opcional) CORS se você chamar de outro domínio
         "Access-Control-Allow-Origin": "*",
       },
       body: JSON.stringify(data),

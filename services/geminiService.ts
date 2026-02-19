@@ -1,4 +1,17 @@
+// services/geminiService.ts
 import { BeachData, RiskLevel, GroundingSource } from "../types";
+
+type GeminiInlineDataPart = {
+  inlineData: { mimeType: string; data: string };
+};
+
+type GeminiTextPart = { text: string };
+type GeminiPart = GeminiTextPart | GeminiInlineDataPart;
+
+type HistoryMsg = {
+  role: "user" | "model";
+  parts: GeminiPart[];
+};
 
 /**
  * Chama a Netlify Function (server-side) que conversa com o Gemini usando a API key segura no Netlify.
@@ -23,9 +36,8 @@ const callGemini = async (payload: {
   return data;
 };
 
-// ✅ Modelos mais “certinhos” pra API REST
-const IDENTIFY_MODEL = "gemini-1.5-flash";
-const ASSISTANT_MODEL = "gemini-1.5-flash";
+const IDENTIFY_MODEL = "gemini-2.5-flash";
+const ASSISTANT_MODEL = "gemini-3-flash-preview";
 
 const IDENTIFY_SYSTEM_INSTRUCTION = `
 Você é o sistema "Praia Segura", especialista em salvamento aquático e prevenção de afogamentos.
@@ -83,6 +95,7 @@ const parseGeminiResponse = (
 
   const groundingChunks =
     response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+
   const sources: GroundingSource[] = groundingChunks
     .map((chunk: any) => {
       if (chunk.web) return { uri: chunk.web.uri, title: chunk.web.title };
@@ -121,23 +134,23 @@ export const identifyBeach = async (
   lat: number,
   lng: number
 ): Promise<BeachData> => {
-  // ✅ Força Brasil + pede para escolher a praia mais provável
-  const prompt = `Analise a praia NO BRASIL mais próxima destas coordenadas: Lat ${lat}, Lng ${lng}.
-Se não conseguir ter certeza do nome oficial, retorne o nome MAIS PROVÁVEL da praia mais conhecida na região, incluindo cidade e estado.
-Foque na segurança infantil.
-Timestamp: ${Date.now()}`;
+  const prompt = `Use Google Maps (grounding) para identificar a praia com precisão pelas coordenadas.
+Depois gere o JSON de segurança.
+Coordenadas: Lat ${lat}, Lng ${lng}. Timestamp: ${Date.now()}`;
 
   const response = await callGemini({
     model: IDENTIFY_MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: prompt }],
-      },
-    ],
-    // ✅ sem tools do Maps (mais compatível fora do AI Studio)
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: {
+      tools: [{ googleMaps: {} }],
+      toolConfig: {
+        retrievalConfig: { latLng: { latitude: lat, longitude: lng } },
+      },
       systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.2,
+      },
     },
   });
 
@@ -145,35 +158,32 @@ Timestamp: ${Date.now()}`;
 };
 
 export const searchBeach = async (query: string): Promise<BeachData> => {
-  // ✅ Força Brasil + resolve ambiguidade
-  const prompt = `Análise detalhada de segurança da praia NO BRASIL: "${query}".
-Se o nome for ambíguo, escolha a praia mais conhecida com esse nome e informe cidade e estado.
-Foque em balneabilidade e riscos para crianças.
-Timestamp: ${Date.now()}`;
+  const prompt = `
+Use Google Maps (grounding) para encontrar a praia no Brasil a partir do nome abaixo.
+Se houver mais de uma praia com o mesmo nome, escolha a correspondência mais provável e deixe claro no "mainWarning" que pode haver homônimos.
+Agora retorne o JSON de segurança.
+
+BUSCA: "${query}" (Brasil). Timestamp: ${Date.now()}
+`.trim();
 
   const response = await callGemini({
     model: IDENTIFY_MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: prompt }],
-      },
-    ],
-    // ✅ sem tools do Maps (mais compatível fora do AI Studio)
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: {
+      tools: [{ googleMaps: {} }],
       systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
+      generationConfig: {
+        responseMimeType: "application/json",
+        temperature: 0.2,
+      },
     },
   });
 
   return parseGeminiResponse(response);
 };
 
-type GeminiPart =
-  | { text: string }
-  | { inlineData: { mimeType: string; data: string } };
-
 export const getSafetyAdvice = async (
-  history: { role: string; parts: GeminiPart[] }[],
+  history: HistoryMsg[],
   currentBeach?: BeachData,
   imageBase64?: string
 ) => {
@@ -183,10 +193,11 @@ CONTEXTO: Praia ${currentBeach ? currentBeach.name : "Desconhecida"}.
 Responda priorizando a vida.`;
 
   const contents = history.map((msg) => ({
-    role: msg.role === "user" ? "user" : "model",
+    role: msg.role,
     parts: msg.parts,
   }));
 
+  // Se tiver imagem, adiciona no último item
   if (imageBase64 && contents.length) {
     const base64Data = imageBase64.split(",")[1] || imageBase64;
     contents[contents.length - 1].parts = [
@@ -205,13 +216,13 @@ Responda priorizando a vida.`;
     contents,
     config: {
       systemInstruction,
-      // você pode manter, mas se der problema, removemos depois
       tools: [{ googleSearch: {} }],
     },
   });
 
   const groundingChunks =
     response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+
   const sources: GroundingSource[] = groundingChunks
     .map((chunk: any) => {
       if (chunk.web) return { uri: chunk.web.uri, title: chunk.web.title };
