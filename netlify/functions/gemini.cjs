@@ -2,7 +2,6 @@
 
 exports.handler = async (event) => {
   try {
-    // CORS / preflight (não atrapalha e evita dor de cabeça)
     if (event.httpMethod === "OPTIONS") {
       return {
         statusCode: 204,
@@ -31,18 +30,17 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: "Missing model or contents" };
     }
 
-    // Normaliza config (principalmente systemInstruction)
+    // ✅ Normaliza config pro formato REST
     const normalizedConfig = { ...(config || {}) };
 
-    // Se vier string, transforma no formato que o REST entende
+    // ✅ REST precisa systemInstruction como objeto (não string)
     if (typeof normalizedConfig.systemInstruction === "string") {
       normalizedConfig.systemInstruction = {
         parts: [{ text: normalizedConfig.systemInstruction }],
       };
     }
 
-    // CORREÇÃO PRINCIPAL:
-    // No REST, tools/toolConfig/systemInstruction/generationConfig ficam no topo do body
+    // ✅ AQUI é a correção principal: config vai no topo, não em body.config
     const body = {
       contents,
       ...normalizedConfig,
@@ -63,7 +61,6 @@ exports.handler = async (event) => {
 
     const data = await r.json().catch(() => ({}));
 
-    // Monta "text" igual SDK
     const text =
       data?.candidates?.[0]?.content?.parts
         ?.map((p) => p?.text)
