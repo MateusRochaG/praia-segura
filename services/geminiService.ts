@@ -23,8 +23,9 @@ const callGemini = async (payload: {
   return data;
 };
 
-const IDENTIFY_MODEL = "gemini-2.5-flash";
-const ASSISTANT_MODEL = "gemini-3-flash-preview";
+// ✅ Modelos mais “certinhos” pra API REST
+const IDENTIFY_MODEL = "gemini-1.5-flash";
+const ASSISTANT_MODEL = "gemini-1.5-flash";
 
 const IDENTIFY_SYSTEM_INSTRUCTION = `
 Você é o sistema "Praia Segura", especialista em salvamento aquático e prevenção de afogamentos.
@@ -120,22 +121,22 @@ export const identifyBeach = async (
   lat: number,
   lng: number
 ): Promise<BeachData> => {
-  const prompt = `Analise a praia nas coordenadas: Lat ${lat}, Lng ${lng}. Foque na segurança infantil. Timestamp: ${Date.now()}`;
+  // ✅ Força Brasil + pede para escolher a praia mais provável
+  const prompt = `Analise a praia NO BRASIL mais próxima destas coordenadas: Lat ${lat}, Lng ${lng}.
+Se não conseguir ter certeza do nome oficial, retorne o nome MAIS PROVÁVEL da praia mais conhecida na região, incluindo cidade e estado.
+Foque na segurança infantil.
+Timestamp: ${Date.now()}`;
 
   const response = await callGemini({
     model: IDENTIFY_MODEL,
-    // ✅ FORMATO CERTO PARA REST: array role/parts
     contents: [
       {
         role: "user",
         parts: [{ text: prompt }],
       },
     ],
+    // ✅ sem tools do Maps (mais compatível fora do AI Studio)
     config: {
-      tools: [{ googleMaps: {} }],
-      toolConfig: {
-        retrievalConfig: { latLng: { latitude: lat, longitude: lng } },
-      },
       systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
     },
   });
@@ -144,19 +145,22 @@ export const identifyBeach = async (
 };
 
 export const searchBeach = async (query: string): Promise<BeachData> => {
-  const prompt = `Análise detalhada de segurança: "${query}". Forneça dados técnicos sobre balneabilidade para crianças. Timestamp: ${Date.now()}`;
+  // ✅ Força Brasil + resolve ambiguidade
+  const prompt = `Análise detalhada de segurança da praia NO BRASIL: "${query}".
+Se o nome for ambíguo, escolha a praia mais conhecida com esse nome e informe cidade e estado.
+Foque em balneabilidade e riscos para crianças.
+Timestamp: ${Date.now()}`;
 
   const response = await callGemini({
     model: IDENTIFY_MODEL,
-    // ✅ FORMATO CERTO PARA REST: array role/parts
     contents: [
       {
         role: "user",
         parts: [{ text: prompt }],
       },
     ],
+    // ✅ sem tools do Maps (mais compatível fora do AI Studio)
     config: {
-      tools: [{ googleMaps: {} }],
       systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
     },
   });
@@ -174,13 +178,11 @@ Seu tom deve ser educativo e preventivo.
 CONTEXTO: Praia ${currentBeach ? currentBeach.name : "Desconhecida"}.
 Responda priorizando a vida.`;
 
-  // Histórico no formato da API (user/model)
   const contents = history.map((msg) => ({
     role: msg.role === "user" ? "user" : "model",
     parts: msg.parts,
   }));
 
-  // Se tiver imagem, adiciona no último item
   if (imageBase64 && contents.length) {
     const base64Data = imageBase64.split(",")[1] || imageBase64;
     contents[contents.length - 1].parts = [
@@ -199,6 +201,7 @@ Responda priorizando a vida.`;
     contents,
     config: {
       systemInstruction,
+      // você pode manter, mas se der problema, removemos depois
       tools: [{ googleSearch: {} }],
     },
   });
