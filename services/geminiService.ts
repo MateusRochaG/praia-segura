@@ -1,32 +1,9 @@
-type InlineDataPart = { inlineData: { mimeType: string; data: string } };
-type TextPart = { text: string };
-type Part = TextPart | InlineDataPart;
-
-
-// services/geminiService.ts
 import { BeachData, RiskLevel, GroundingSource } from "../types";
 
-type GeminiInlineDataPart = {
-  inlineData: { mimeType: string; data: string };
-};
-
-type GeminiTextPart = { text: string };
-type GeminiPart = GeminiTextPart | GeminiInlineDataPart;
-
-type HistoryMsg = {
-  role: "user" | "model";
-  parts: GeminiPart[];
-};
-
 /**
- * Chama a Netlify Function (server-side) que conversa com o Gemini usando a API key segura no Netlify.
- * A API key NUNCA deve ficar no front-end.
+ * Netlify Function (server-side) que conversa com o Gemini usando a API key segura no Netlify.
  */
-const callGemini = async (payload: {
-  model: string;
-  contents: any;
-  config?: any;
-}) => {
+const callGemini = async (payload: { model: string; contents: any; config?: any }) => {
   const r = await fetch("/.netlify/functions/gemini", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -39,6 +16,32 @@ const callGemini = async (payload: {
     throw new Error(msg);
   }
   return data;
+};
+
+/**
+ * Netlify Function (server-side) que faz geocoding/reverse geocoding via Nominatim (OpenStreetMap)
+ * sem precisar de API key.
+ */
+const callGeo = async (payload: { q?: string; lat?: number; lng?: number }) => {
+  const r = await fetch("/.netlify/functions/geo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = data?.error || data?.message || JSON.stringify(data);
+    throw new Error(msg);
+  }
+  return data as {
+    display_name: string;
+    lat: number;
+    lng: number;
+    city?: string;
+    state?: string;
+    stateCode?: string;
+  };
 };
 
 const IDENTIFY_MODEL = "gemini-2.5-flash";
@@ -94,13 +97,10 @@ const parseGeminiResponse = (
   let rLevel = RiskLevel.UNKNOWN;
   const rLevelStr = (parsedData.riskLevel || "").toLowerCase();
   if (rLevelStr.includes("alto")) rLevel = RiskLevel.HIGH;
-  else if (rLevelStr.includes("médio") || rLevelStr.includes("medio"))
-    rLevel = RiskLevel.MEDIUM;
+  else if (rLevelStr.includes("médio") || rLevelStr.includes("medio")) rLevel = RiskLevel.MEDIUM;
   else if (rLevelStr.includes("baixo")) rLevel = RiskLevel.LOW;
 
-  const groundingChunks =
-    response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-
+  const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
   const sources: GroundingSource[] = groundingChunks
     .map((chunk: any) => {
       if (chunk.web) return { uri: chunk.web.uri, title: chunk.web.title };
@@ -111,8 +111,7 @@ const parseGeminiResponse = (
 
   const childFriendlyRaw = parsedData.childFriendly ?? parsedData.child_friendly;
   const childFriendly =
-    childFriendlyRaw === true ||
-    String(childFriendlyRaw).toLowerCase() === "true";
+    childFriendlyRaw === true || String(childFriendlyRaw).toLowerCase() === "true";
 
   const rawReason =
     parsedData.childFriendlyReason ||
@@ -135,60 +134,67 @@ const parseGeminiResponse = (
   };
 };
 
-export const identifyBeach = async (
-  lat: number,
-  lng: number
-): Promise<BeachData> => {
-  const prompt = `Use Google Maps (grounding) para identificar a praia com precisão pelas coordenadas.
-Depois gere o JSON de segurança.
-Coordenadas: Lat ${lat}, Lng ${lng}. Timestamp: ${Date.now()}`;
+// ✅ GPS: usa Nominatim reverse e manda pro Gemini
+export const identifyBeach = async (lat: number, lng: number): Promise<BeachData> => {
+  const place = await callGeo({ lat, lng });
 
-  const response = await callGemini({
-    model: IDENTIFY_MODEL,
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: {
-      tools: [{ googleMaps: {} }],
-      toolConfig: {
-        retrievalConfig: { latLng: { latitude: lat, longitude: lng } },
-      },
-      systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.2,
-      },
-    },
-  });
-
-  return parseGeminiResponse(response, { lat, lng });
-};
-
-export const searchBeach = async (query: string): Promise<BeachData> => {
   const prompt = `
-Use Google Maps (grounding) para encontrar a praia no Brasil a partir do nome abaixo.
-Se houver mais de uma praia com o mesmo nome, escolha a correspondência mais provável e deixe claro no "mainWarning" que pode haver homônimos.
-Agora retorne o JSON de segurança.
+Local aproximado pelo GPS:
+- display_name: ${place.display_name}
+- coordenadas: ${place.lat}, ${place.lng}
+- cidade: ${place.city || "desconhecida"}
+- estado: ${place.stateCode || place.state || "desconhecido"}
 
-BUSCA: "${query}" (Brasil). Timestamp: ${Date.now()}
+Com base nisso, identifique a PRAIA MAIS PRÓXIMA e gere o JSON de segurança. 
+Se não der para afirmar o nome exato, escolha a melhor correspondência e explique os riscos com foco em segurança infantil.
+Timestamp: ${Date.now()}
 `.trim();
 
   const response = await callGemini({
     model: IDENTIFY_MODEL,
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: {
-      tools: [{ googleMaps: {} }],
       systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.2,
-      },
+      // ajuda o modelo a devolver JSON mais certinho
+      responseMimeType: "application/json",
     },
   });
 
-  return parseGeminiResponse(response);
+  return parseGeminiResponse(response, { lat: place.lat, lng: place.lng });
 };
 
+// ✅ Busca digitada: usa Nominatim search e manda pro Gemini
+export const searchBeach = async (query: string): Promise<BeachData> => {
+  const place = await callGeo({ q: query });
+
+  const prompt = `
+Busca do usuário: "${query}"
+Resultado de localização:
+- display_name: ${place.display_name}
+- coordenadas: ${place.lat}, ${place.lng}
+- cidade: ${place.city || "desconhecida"}
+- estado: ${place.stateCode || place.state || "desconhecido"}
+
+Agora gere o JSON de segurança para a PRAIA encontrada. 
+Use o nome oficial mais adequado.
+Timestamp: ${Date.now()}
+`.trim();
+
+  const response = await callGemini({
+    model: IDENTIFY_MODEL,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
+      responseMimeType: "application/json",
+    },
+  });
+
+  return parseGeminiResponse(response, { lat: place.lat, lng: place.lng });
+};
+
+// ✅ Chat (com imagem opcional) — corrige o erro do inlineData usando "any"
 export const getSafetyAdvice = async (
-  history: HistoryMsg[],
+  history: { role: string; parts: any[] }[],
   currentBeach?: BeachData,
   imageBase64?: string
 ) => {
@@ -198,11 +204,10 @@ CONTEXTO: Praia ${currentBeach ? currentBeach.name : "Desconhecida"}.
 Responda priorizando a vida.`;
 
   const contents = history.map((msg) => ({
-    role: msg.role,
+    role: msg.role === "user" ? "user" : "model",
     parts: msg.parts,
   }));
 
-  // Se tiver imagem, adiciona no último item
   if (imageBase64 && contents.length) {
     const base64Data = imageBase64.split(",")[1] || imageBase64;
     contents[contents.length - 1].parts = [
@@ -225,9 +230,7 @@ Responda priorizando a vida.`;
     },
   });
 
-  const groundingChunks =
-    response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-
+  const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
   const sources: GroundingSource[] = groundingChunks
     .map((chunk: any) => {
       if (chunk.web) return { uri: chunk.web.uri, title: chunk.web.title };
