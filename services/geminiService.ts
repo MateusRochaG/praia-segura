@@ -168,8 +168,12 @@ Timestamp: ${Date.now()}`;
   return parseGeminiResponse(response);
 };
 
+type GeminiPart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
+
 export const getSafetyAdvice = async (
-  history: { role: string; parts: { text: string }[] }[],
+  history: { role: string; parts: GeminiPart[] }[],
   currentBeach?: BeachData,
   imageBase64?: string
 ) => {
