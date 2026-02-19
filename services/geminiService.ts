@@ -1,3 +1,8 @@
+type InlineDataPart = { inlineData: { mimeType: string; data: string } };
+type TextPart = { text: string };
+type Part = TextPart | InlineDataPart;
+
+
 // services/geminiService.ts
 import { BeachData, RiskLevel, GroundingSource } from "../types";
 
