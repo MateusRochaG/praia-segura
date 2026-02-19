@@ -1,0 +1,8 @@
+{
+  "name": "Praia Segura",
+  "description": "Seu assistente de segurança nas praias brasileiras. Identificação automática, alertas de risco e dicas de prevenção.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
