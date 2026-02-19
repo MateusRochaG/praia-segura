@@ -120,9 +120,17 @@ export const identifyBeach = async (
   lat: number,
   lng: number
 ): Promise<BeachData> => {
+  const prompt = `Analise a praia nas coordenadas: Lat ${lat}, Lng ${lng}. Foque na segurança infantil. Timestamp: ${Date.now()}`;
+
   const response = await callGemini({
     model: IDENTIFY_MODEL,
-    contents: `Analise a praia nas coordenadas: Lat ${lat}, Lng ${lng}. Foque na segurança infantil. Timestamp: ${Date.now()}`,
+    // ✅ FORMATO CERTO PARA REST: array role/parts
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }],
+      },
+    ],
     config: {
       tools: [{ googleMaps: {} }],
       toolConfig: {
@@ -136,9 +144,17 @@ export const identifyBeach = async (
 };
 
 export const searchBeach = async (query: string): Promise<BeachData> => {
+  const prompt = `Análise detalhada de segurança: "${query}". Forneça dados técnicos sobre balneabilidade para crianças. Timestamp: ${Date.now()}`;
+
   const response = await callGemini({
     model: IDENTIFY_MODEL,
-    contents: `Análise detalhada de segurança: "${query}". Forneça dados técnicos sobre balneabilidade para crianças. Timestamp: ${Date.now()}`,
+    // ✅ FORMATO CERTO PARA REST: array role/parts
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }],
+      },
+    ],
     config: {
       tools: [{ googleMaps: {} }],
       systemInstruction: IDENTIFY_SYSTEM_INSTRUCTION,
@@ -158,13 +174,13 @@ Seu tom deve ser educativo e preventivo.
 CONTEXTO: Praia ${currentBeach ? currentBeach.name : "Desconhecida"}.
 Responda priorizando a vida.`;
 
-  // histórico no formato da API (user/model)
+  // Histórico no formato da API (user/model)
   const contents = history.map((msg) => ({
     role: msg.role === "user" ? "user" : "model",
     parts: msg.parts,
   }));
 
-  // adiciona imagem na última mensagem, se houver
+  // Se tiver imagem, adiciona no último item
   if (imageBase64 && contents.length) {
     const base64Data = imageBase64.split(",")[1] || imageBase64;
     contents[contents.length - 1].parts = [
