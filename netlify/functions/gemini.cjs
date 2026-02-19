@@ -1,4 +1,3 @@
-// netlify/functions/gemini.cjs
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
@@ -14,26 +13,19 @@ exports.handler = async (event) => {
     const { model, contents, config } = payload;
 
     if (!model || !contents) {
-      return { statusCode: 400, body: "Missing model or contents" };
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "Missing model or contents" }),
+      };
     }
 
-    // ✅ URL REST do Gemini
     const url =
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
         model
-      )}:generateContent?key=` + apiKey;
+      )}:generateContent?key=${apiKey}`;
 
-    // ✅ A API NÃO aceita "config" dentro do body.
-    // Precisamos espalhar (merge) o config no body
-    const body = {
-      contents,
-      ...(config || {}),
-    };
-
-    // ✅ systemInstruction no REST pode precisar ser objeto
-    if (typeof body.systemInstruction === "string") {
-      body.systemInstruction = { parts: [{ text: body.systemInstruction }] };
-    }
+    // ✅ O REST espera tudo no topo (systemInstruction, tools, toolConfig...)
+    const body = { contents, ...(config || {}) };
 
     const r = await fetch(url, {
       method: "POST",
@@ -41,14 +33,15 @@ exports.handler = async (event) => {
       body: JSON.stringify(body),
     });
 
-    const data = await r.json();
+    const data = await r.json().catch(() => ({}));
 
-    // ✅ Cria "text" para seu parse (igual SDK)
+    // Cria um "text" pra seu parse continuar funcionando
     const text =
       data?.candidates?.[0]?.content?.parts
         ?.map((p) => p?.text)
         ?.filter(Boolean)
         ?.join("") || "";
+
     data.text = text;
 
     return {
