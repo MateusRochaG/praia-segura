@@ -6,26 +6,49 @@ exports.handler = async (event) => {
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return { statusCode: 500, body: "Missing GEMINI_API_KEY" };
+      return {
+        statusCode: 500,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ error: "Missing GEMINI_API_KEY" }),
+      };
     }
 
     const payload = JSON.parse(event.body || "{}");
-    const { model, contents, config } = payload;
+    const { model, contents, config } = payload || {};
 
     if (!model || !contents) {
       return {
         statusCode: 400,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ error: "Missing model or contents" }),
       };
     }
 
-    const url =
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-        model
-      )}:generateContent?key=${apiKey}`;
+    // ✅ Converte para o formato REST do Gemini (sem "config" aninhado)
+    const body = { contents };
 
-    // ✅ O REST espera tudo no topo (systemInstruction, tools, toolConfig...)
-    const body = { contents, ...(config || {}) };
+    if (config && typeof config === "object") {
+      if (config.systemInstruction) {
+        body.systemInstruction =
+          typeof config.systemInstruction === "string"
+            ? { parts: [{ text: config.systemInstruction }] }
+            : config.systemInstruction;
+      }
+
+      // ✅ remove googleMaps se vier (quebra fora do AI Studio)
+      if (Array.isArray(config.tools)) {
+        const tools = config.tools.filter((t) => !t.googleMaps);
+        if (tools.length) body.tools = tools;
+      }
+
+      if (config.toolConfig) body.toolConfig = config.toolConfig;
+      if (config.generationConfig) body.generationConfig = config.generationConfig;
+      if (config.safetySettings) body.safetySettings = config.safetySettings;
+    }
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      model
+    )}:generateContent?key=${apiKey}`;
 
     const r = await fetch(url, {
       method: "POST",
@@ -35,7 +58,6 @@ exports.handler = async (event) => {
 
     const data = await r.json().catch(() => ({}));
 
-    // Cria um "text" pra seu parse continuar funcionando
     const text =
       data?.candidates?.[0]?.content?.parts
         ?.map((p) => p?.text)
@@ -55,7 +77,10 @@ exports.handler = async (event) => {
   } catch (e) {
     return {
       statusCode: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
       body: JSON.stringify({ error: String(e?.message ?? e) }),
     };
   }
